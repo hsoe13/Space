@@ -1,0 +1,222 @@
+---
+title: "Space"
+output: html_document
+date: "2023-11-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+train <- read.csv("train.csv")
+test <- read.csv("test.csv")
+
+#spread columns
+pp <- as.numeric(gsub("^[0-9_]{6}","",train$PassengerId))
+gggg <- as.numeric(gsub("[0-9_]{3}$","",train$PassengerId))
+train$pp <- pp
+train$gggg <- gggg
+pp <- as.numeric(gsub("^[0-9_]{6}","",test$PassengerId))
+gggg <- as.numeric(gsub("[0-9_]{3}$","",test$PassengerId))
+test$pp <- pp
+test$gggg <- gggg
+
+library(stringr)
+cabin1 <- str_extract(train$Cabin, "^[A-Z]{1}")
+cabin2 <- as.numeric(gsub("[A-Z/]","",train$Cabin))
+cabin3 <- str_extract(train$Cabin, "[A-Z]{1}$")
+train$cabine1 <- cabin1
+train$cabin2 <- cabin2
+train$cabin3 <- cabin3
+cabin1 <- str_extract(test$Cabin, "^[A-Z]{1}")
+cabin2 <- as.numeric(gsub("[A-Z/]","",test$Cabin))
+cabin3 <- str_extract(test$Cabin, "[A-Z]{1}$")
+test$cabine1 <- cabin1
+test$cabin2 <- cabin2
+test$cabin3 <- cabin3
+
+train$HomePlanet <- as.numeric(factor(train$HomePlanet, levels=c("Earth", "Europa", "Mars", "")))
+test$HomePlanet <- as.numeric(factor(test$HomePlanet, levels=c("Earth", "Europa", "Mars", "")))
+train$HomePlanet <- ifelse(train$HomePlanet==4, NA, train$HomePlanet)
+test$HomePlanet <- ifelse(test$HomePlanet==4, NA, test$HomePlanet)
+
+train$CryoSleep <- as.numeric(factor(train$CryoSleep, levels=c("False", "True", "")))
+test$CryoSleep <- as.numeric(factor(test$CryoSleep, levels=c("False", "True", "")))
+train$CryoSleep <- ifelse(train$CryoSleep==3, NA, train$CryoSleep)
+test$CryoSleep <- ifelse(test$CryoSleep==3, NA, test$CryoSleep)
+
+train$Destination <- as.numeric(factor(train$Destination, levels=c("TRAPPIST-1e", "PSO J318.5-22", "55 Cancri e", "")))
+test$Destination <- as.numeric(factor(test$Destination, levels=c("False", "True", "")))
+train$Destination <- ifelse(train$Destination==4, NA, train$Destination)
+test$Destination <- ifelse(test$Destination==4, NA, test$Destination)
+
+train$VIP <- as.numeric(factor(train$VIP, levels=c("False", "True", "")))
+test$VIP <- as.numeric(factor(test$VIP, levels=c("False", "True", "")))
+train$VIP <- ifelse(train$VIP==3, NA, train$VIP)
+test$VIP <- ifelse(test$VIP==3, NA, test$VIP)
+
+train$cabine1 <- as.numeric(factor(train$cabine1, levels=c("B", "F", "A", "G", "E", "D", "C", "T", NA)))
+test$cabine1 <- as.numeric(factor(test$cabine1, levels=c("B", "F", "A", "G", "E", "D", "C", "T", NA)))
+
+train$cabin3 <- as.numeric(factor(train$cabin3, levels=c("P", "S", NA)))
+test$cabin3 <- as.numeric(factor(test$cabin3, levels=c("P", "S", NA)))
+
+train$Last <- gsub("^\\w+\\s+", "", train$Name)
+test$Last <- gsub("^\\w+\\s+", "", test$Name)
+
+all_data <- rbind(train[,-14], test)
+all_data$Last <- as.numeric(factor(all_data$Last, levels=unique(all_data$Last)))
+
+train1 <- cbind(all_data[1:nrow(train),], train[,14])
+test1 <- all_data[nrow(train)+1:nrow(test),]
+colnames(train1)[20] <- "Transported"
+train <- train1
+test <- test1
+train$Last <- ifelse(train$Name=="", NA, train$Last)
+test$Last <- ifelse(test$Name=="", NA, test$Last)
+
+train <- subset(train, select=-c(PassengerId, Cabin, Name, pp, VIP))
+test <- subset(test, select=-c(PassengerId, Cabin, Name, pp, VIP))
+
+train$Transported <- ifelse(train$Transported=="True", 0, 1)
+train
+```
+
+```{r}
+#Go
+library(xgboost)
+model <- xgboost(data=as.matrix(train[,-15]), label=as.matrix(train$Transported), nrounds=50, max_depth=3, eta=0.21, objective="binary:logistic")
+predict <- predict(model, newdata=as.matrix(test), type="response")
+predict <- ifelse(predict<=0.5, "True", "False")
+
+library(lightgbm)
+params <- list(objective = "binary",
+               metric = "binary_logloss",
+               boosting_type = "gbdt",
+               num_leaves = 5,
+               learning_rate = 0.04,
+               nthread = 2)
+
+lgb_model <- lgb.train(params = params,
+                       data = lgb.Dataset(as.matrix(train[,-15]), label = train$Transported),
+                       num_boost_round = 400)
+predictionss <- predict(lgb_model, data = as.matrix(test))
+predictionss <- ifelse(predictionss<=0.5, "True", "False")
+```
+
+```{r}
+#Check
+train1 <- read.csv("train.csv")
+test1 <- read.csv("test.csv")
+write.csv(data.frame(PassengerId=test1$PassengerId, Transported=predict), "one.csv", row.names=FALSE)
+now <- read.csv("one.csv")
+summary(now)
+nrow(test1)
+nrow(now)
+now
+
+train1 <- read.csv("train.csv")
+test1 <- read.csv("test.csv")
+write.csv(data.frame(PassengerId=test1$PassengerId, Transported=predictionss), "two.csv", row.names=FALSE)
+now <- read.csv("two.csv")
+summary(now)
+nrow(now)
+nrow(test1)
+now
+```
+
+```{r}
+#Validation Set Approach
+set.seed(17)
+number <- sample(1:8693, 3477)
+training <- train[-number,]
+testing <- train[number,]
+
+library(xgboost)
+modeling <- xgboost(data=as.matrix(training[,-15]), label=as.matrix(training$Transported), nrounds=50, max_depth=3, eta=0.21, objective="binary:logistic")
+predicting <- predict(modeling, newdata=as.matrix(testing[,-15]), type="response")
+predicting1 <- ifelse(predicting <= 0.5, 0, 1)
+forall <- table(predicting1, testing[,15])
+hay <- (forall[1] + forall[4]) / sum(forall)
+print(hay)
+
+
+
+library(lightgbm)
+#learning rates
+round <- c(seq(50, 500, by=50))
+rate3 <- c()
+for (i in round){
+  params <- list(objective = "binary",
+                metric = "binary_logloss",
+                boosting_type = "gbdt",
+                num_leaves = 5,
+                learning_rate = 0.04,
+                nthread = 2)
+
+  lgb_model <- lgb.train(params = params,
+                        data = lgb.Dataset(as.matrix(training[,-15]), label = training$Transported),
+                        num_boost_round = i)
+
+  # Make predictions
+  predictions <- predict(lgb_model, data = as.matrix(testing[,-15]))
+  predictions <- ifelse(predictions<=0.5, 0, 1)
+  foralll <- table(predictions, testing[,15])
+  hay <- (foralll[1] + foralll[4]) / sum(foralll)
+  rate3 <- c(rate3, hay)
+}
+rate3
+#learning rates
+learning_rates <- c(seq(0.01, 0.05, by=0.01))
+rate1 <- c()
+for (i in learning_rates){
+  params <- list(objective = "binary",
+                metric = "binary_logloss",
+                boosting_type = "gbdt",
+                num_leaves = 5,
+                learning_rate = i,
+                nthread = 2)
+
+  lgb_model <- lgb.train(params = params,
+                        data = lgb.Dataset(as.matrix(training[,-15]), label = training$Transported),
+                        num_boost_round = 400)
+
+  # Make predictions
+  predictions <- predict(lgb_model, data = as.matrix(testing[,-15]))
+  predictions <- ifelse(predictions<=0.5, 0, 1)
+  foralll <- table(predictions, testing[,15])
+  hay <- (foralll[1] + foralll[4]) / sum(foralll)
+  rate1 <- c(rate1, hay)
+}
+rate1
+#num_leaves
+num_leave <- c(seq(2, 100, by=1))
+rate2 <- c()
+for (i in num_leave){
+  params <- list(objective = "binary",
+                metric = "binary_logloss",
+                boosting_type = "gbdt",
+                num_leaves = i,
+                learning_rate = 0.04,
+                nthread = 2)
+
+  lgb_model <- lgb.train(params = params,
+                        data = lgb.Dataset(as.matrix(training[,-15]), label = training$Transported),
+                        num_boost_round = 400)
+
+  # Make predictions
+  predictions <- predict(lgb_model, data = as.matrix(testing[,-15]))
+  predictions <- ifelse(predictions<=0.5, 0, 1)
+  foralll <- table(predictions, testing[,15])
+  hay <- (foralll[1] + foralll[4]) / sum(foralll)
+  rate2 <- c(hay, rate2)
+}
+rate2
+```
+
+```{r}
+#Plot
+xgb.plot.shap(data=as.matrix(train[1:16]), model=model, top_n=5)
+xgb.importance(feature_names=colnames(train[1:16]), model=model)
+```
